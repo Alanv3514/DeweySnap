@@ -1,15 +1,40 @@
-# Books-Scrapper
-Una aplicacion desarrollada en python con el fin de consultar 2 apis de databases de libros, recolectar informacion relevante como titulo, categoria dewey y una breve descripcion
-(descripcion no siempre encuentra)
+# 📚 Books-Scrapper
 
-## Objetivo
-Preparar un baco de datasets para posteriormente entrenar modelos de categorizacion automatica a travez de ia para PDFs
+Aplicación desarrollada en Python para consultar dos APIs de bases de datos de libros, recolectando información relevante como:
 
-## Modo de uso
-El script DataSetScrapper.py contiene la logica principal del nodo recolector, con funciones para cada api y organizando la recoleccion en batchs de N intentos, por cada batch busca hacer N consultas a las api en un rango de ids suministrado, si la informacion contiene titulo y dewey el intento es exitoso y se computa para el resultado final, caso contrario se descarta. El algoritmo itera indefinidamente hasta alcanzar 100 o mas datos validos. Puede mejorarse seteando un timeout y un batch dinamico en funcion de la velocidad de obtencion de exitos.
-El script multi.py lanza el DataSetScrapper.py en subprocesos para poder disminuir el tiempo de recoleccion lo mayor posible. La cantidad de subprocesos y el tamaño de los batch de datos deben experimentarse segun su hardware.
+- Título
+- Clasificación Dewey
+- Breve descripción *(cuando está disponible)*
 
-##Resultados
-En poco mas de 40 minutos se pudo completar la tarea de conseguir 10 txt con aproximadamente 100 datos validos cada uno que luego fueron mergeados manualmente a un txt final.
-###Procesador : Intel i5 13400f
+---
 
+## 🎯 Objetivo
+
+Preparar un banco de datos para entrenar modelos de categorización automática de PDFs mediante inteligencia artificial.
+
+---
+
+## ⚙️ Modo de uso
+
+- El script `DataSetScrapper.py` contiene la lógica principal del nodo recolector:
+  - Implementa funciones específicas para cada API.
+  - Organiza la recolección en *batches* de N intentos.
+  - Por cada batch, realiza N consultas en un rango de IDs suministrado.
+  - Si la información contiene **título** y **clasificación Dewey**, el intento se considera exitoso.
+  - Los intentos fallidos se descartan automáticamente.
+  - El algoritmo itera indefinidamente hasta recolectar al menos **100 datos válidos**.
+
+> 💡 Puede mejorarse implementando un timeout y ajustando dinámicamente el tamaño del batch según la tasa de éxito.
+
+- El script `multi.py` lanza `DataSetScrapper.py` en **subprocesos** para acelerar la recolección.
+  - La cantidad de subprocesos y el tamaño de los batches deben ajustarse según el hardware disponible.
+
+---
+
+## 📈 Resultados
+
+En poco más de **40 minutos**, se lograron recolectar **10 archivos `.txt`** con aproximadamente **100 datos válidos** cada uno. Luego fueron **combinados manualmente** en un archivo final.
+
+### 🖥️ Hardware utilizado
+- **Procesador:** Intel i5 13400F
+- **Internet:** 250Mbps
