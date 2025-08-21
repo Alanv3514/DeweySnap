@@ -1,0 +1,11 @@
+Clasificación Dewey – Clases principales
+000 – Generalidades (Informática, bibliotecología, enciclopedias, periodismo)
+100 – Filosofía y psicología
+200 – Religión
+300 – Ciencias sociales (sociología, economía, derecho, educación, política)
+400 – Lenguas
+500 – Ciencias puras (matemáticas, ciencias naturales, física, química, biología)
+600 – Tecnología y ciencias aplicadas (medicina, ingeniería, agricultura, negocios)
+700 – Artes y recreación (música, bellas artes, deportes, entretenimiento)
+800 – Literatura (poesía, teatro, narrativa, crítica literaria)
+900 – Historia y geografía (biografía, viajes, arqueología)
