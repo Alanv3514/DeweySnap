@@ -3,12 +3,12 @@
 
 """
 Fine-tuning multilingüe (ES/EN) para clasificar categorías Dewey desde un TXT:
-titulo | dewey | descripcion
+titulo | dewey (número) | texto_dewey (nombre/etiqueta) | descripcion
 
 - Modelo: xlm-roberta-base (multilingüe)
 - Manejo de clases raras: las manda a TRAIN (no a VALID)
 - Split estratificado en clases "comunes"
-- Tokenización sobre título/desc (uno, otro o ambos)
+- Tokenización sobre título/desc (uno, otro o ambos)  <-- NO usa texto_dewey para evitar fuga
 - Class weights para desbalanceo
 - FP16 en GPU, EarlyStopping, mejor checkpoint
 - Artefactos: modelo HF, label2id/id2label, metrics.json, reportes
@@ -20,7 +20,7 @@ Recomendado (GPU):
     accelerate launch train_dewey_xlmr.py --data ./libros.txt --text_fields both --epochs 5 --batch_size 16
 """
 
-import os, json, re, argparse, warnings
+import os, json, re, argparse, warnings, inspect
 from typing import Tuple, List, Dict
 from collections import Counter
 from math import ceil
@@ -28,19 +28,18 @@ from datetime import datetime
 
 import numpy as np
 import torch
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from datasets import Dataset, DatasetDict
 from transformers import (
     AutoTokenizer, AutoModelForSequenceClassification,
     DataCollatorWithPadding, Trainer, TrainingArguments, EarlyStoppingCallback
 )
-from transformers.trainer import TrainerCallback
 import evaluate
-from sklearn.model_selection import train_test_split
-import pandas as pd
-import inspect
+
 # ---------------------------
-# Utilidades de parsing y limpieza (idénticas a tu flujo)
+# Utilidades de parsing y limpieza
 # ---------------------------
 
 def basic_clean(text: str) -> str:
@@ -50,19 +49,29 @@ def basic_clean(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-def parse_line(line: str) -> Tuple[str, str, str]:
+def parse_line(line: str) -> Tuple[str, str, str, str]:
+    """
+    Devuelve: (title, dewey_num, dewey_text, desc)
+    Acepta líneas con menos de 4 campos y completa con "".
+    """
     line = line.lstrip("\ufeff")
     if line.strip().startswith("#"):
-        return "", "", ""
-    parts = [p.strip() for p in line.rstrip("\n").split("|", 2)]
-    if len(parts) == 0: return "", "", ""
-    if len(parts) == 1: parts += [""]
-    if len(parts) == 2: parts += [""]
-    title, dewey, desc = parts[0], parts[1], parts[2]
-    return basic_clean(title), basic_clean(dewey), basic_clean(desc)
+        return "", "", "", ""
+    # maxsplit=3 para permitir '|' dentro de la descripción
+    parts = [p.strip() for p in line.rstrip("\n").split("|", 3)]
+    while len(parts) < 4:
+        parts.append("")
+    title, dewey_num, dewey_text, desc = parts[:4]
+    return (
+        basic_clean(title),
+        basic_clean(dewey_num),
+        basic_clean(dewey_text),
+        basic_clean(desc),
+    )
 
 def is_missing_label(lbl: str) -> bool:
-    if not isinstance(lbl, str): return True
+    if not isinstance(lbl, str): 
+        return True
     s = basic_clean(lbl).casefold()
     return s == "" or s == "sin dewey"
 
@@ -72,38 +81,54 @@ def load_dataset(txt_path: str) -> pd.DataFrame:
     rows = []
     with open(txt_path, "r", encoding="utf-8") as f:
         for raw in f:
-            if not raw.strip(): continue
-            t, d, s = parse_line(raw)
-            if t == "" and d == "" and s == "": continue
-            rows.append({"title": t, "dewey": d, "desc": s})
+            if not raw.strip():
+                continue
+            t, d_num, d_txt, s = parse_line(raw)
+            if t == "" and d_num == "" and d_txt == "" and s == "":
+                continue
+            rows.append({
+                "title": t,
+                "dewey": d_num,        # etiqueta NUMÉRICA para entrenar
+                "dewey_text": d_txt,   # texto/nombre de etiqueta (NO usar como input)
+                "desc": s,
+            })
     if not rows:
-        return pd.DataFrame(columns=["title","dewey","desc"])
+        return pd.DataFrame(columns=["title", "dewey", "dewey_text", "desc"])
+
     df = pd.DataFrame(rows)
+    # Filtrado por etiqueta válida (numérica o no vacía)
     mask_valid = ~df["dewey"].apply(is_missing_label)
     df = df[mask_valid].copy()
-    df = df[df["dewey"].astype(str).str.len() > 0]
     df["dewey"] = df["dewey"].astype(str).str.strip()
     df["title"] = df["title"].fillna("").astype(str)
+    df["dewey_text"] = df["dewey_text"].fillna("").astype(str)
     df["desc"]  = df["desc"].fillna("").astype(str)
     return df.reset_index(drop=True)
 
 def build_text_column(df: pd.DataFrame, text_fields: str) -> pd.Series:
+    """
+    Qué se usa como TEXTO DE ENTRADA del modelo:
+    - 'title' -> solo título
+    - 'desc'  -> solo descripción
+    - 'both'  -> título + [SEP] + descripción
+    (NO se usa 'dewey_text' para evitar fuga de etiqueta)
+    """
     tf = text_fields.lower()
     if tf == "title":
-        X = df["title"].fillna("")
+        X = df["title"]
     elif tf == "desc":
-        X = df["desc"].fillna("")
+        X = df["desc"]
     elif tf == "both":
-        X = (df["title"].fillna("") + " [SEP] " + df["desc"].fillna(""))
+        X = (df["title"] + " [SEP] " + df["desc"])
     else:
         raise ValueError("text_fields debe ser: title | desc | both")
     return X.astype(str)
 
 # ---------------------------
-# Dataset HF + split estratificado seguro
+# Split estratificado con manejo de clases raras
 # ---------------------------
 
-def stratified_split_with_rare(df: pd.DataFrame, test_size: float, seed: int, min_per_class: int = 2):
+def stratified_split_with_rare(df: pd.DataFrame, test_size: float, seed: int, min_per_class: int = 4):
     y = df["dewey"].astype(str).values
     idx_all = np.arange(len(df))
     cnt = Counter(y)
@@ -137,13 +162,10 @@ def stratified_split_with_rare(df: pd.DataFrame, test_size: float, seed: int, mi
 # ---------------------------
 # Trainer con class weights
 # ---------------------------
-from transformers import Trainer
-import torch
 
 class WeightedTrainer(Trainer):
     def __init__(self, class_weights=None, **kwargs):
         super().__init__(**kwargs)
-        # Movemos a device; casteamos a dtype correcto en compute_loss
         self.class_weights = None
         if class_weights is not None:
             self.class_weights = class_weights.to(self.args.device)
@@ -152,19 +174,13 @@ class WeightedTrainer(Trainer):
         labels = inputs.get("labels")
         outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
         logits = outputs.logits
-
         if self.class_weights is not None:
-            # Match dtype & device de los logits (fp16/fp32, cpu/gpu)
             cw = self.class_weights.to(device=logits.device, dtype=logits.dtype)
             loss_fct = torch.nn.CrossEntropyLoss(weight=cw)
         else:
             loss_fct = torch.nn.CrossEntropyLoss()
-
         loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
         return (loss, outputs) if return_outputs else loss
-
-
-
 
 # ---------------------------
 # Métricas
@@ -172,20 +188,22 @@ class WeightedTrainer(Trainer):
 
 metric_acc = evaluate.load("accuracy")
 metric_f1  = evaluate.load("f1")
-metric_bal_acc = evaluate.load("accuracy")  # balanced acc la calculamos con sklearn al final
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=-1)
-    out = {
-        "accuracy": metric_acc.compute(predictions=preds, references=labels)["accuracy"],
-        "f1_macro": metric_f1.compute(predictions=preds, references=labels, average="macro")["f1"],
-    }
-    return out
+    acc = metric_acc.compute(predictions=preds, references=labels)["accuracy"]
+    f1m = metric_f1.compute(predictions=preds, references=labels, average="macro")["f1"]
+
+    # Top-3
+    top3 = np.argsort(logits, axis=-1)[:, -3:]
+    top3_acc = float(np.mean([lbl in top3[i] for i, lbl in enumerate(labels)]))
+    return {"accuracy": acc, "f1_macro": f1m, "top3_acc": top3_acc}
 
 # ---------------------------
-# Main
+# TrainingArguments (compat)
 # ---------------------------
+
 def make_training_args(args, fp16: bool):
     desired = dict(
         output_dir=args.artifacts_dir,
@@ -195,8 +213,9 @@ def make_training_args(args, fp16: bool):
         save_total_limit=2,
         seed=args.random_state,
         fp16=fp16,
+        label_smoothing_factor=0.1,
         report_to="none",
-        load_best_model_at_end=True,              # default True (se sobrescribe si pasás flag)
+        load_best_model_at_end=True,
         metric_for_best_model="f1_macro",
         greater_is_better=True,
         evaluation_strategy="epoch",
@@ -223,17 +242,15 @@ def make_training_args(args, fp16: bool):
         desired["warmup_steps"] = args.warmup_steps
     if args.weight_decay is not None:
         desired["weight_decay"] = args.weight_decay
-
     if args.auto_find_batch_size:
         desired["auto_find_batch_size"] = True
     if args.gradient_accumulation_steps is not None:
         desired["gradient_accumulation_steps"] = args.gradient_accumulation_steps
 
-    # Compat con tu versión (eval_strategy/save_strategy vs evaluation_strategy)
+    # Compatibilidad con firmas distintas
     sig = inspect.signature(TrainingArguments.__init__).parameters
     sig_keys = set(sig.keys())
 
-    # per_device_* -> per_gpu_* si toca
     if "per_device_train_batch_size" not in sig_keys and "per_gpu_train_batch_size" in sig_keys:
         desired["per_gpu_train_batch_size"] = desired.pop("per_device_train_batch_size")
         if "per_gpu_eval_batch_size" in sig_keys and "per_device_eval_batch_size" in desired:
@@ -241,17 +258,14 @@ def make_training_args(args, fp16: bool):
         else:
             desired.pop("per_device_eval_batch_size", None)
 
-    # evaluation_strategy -> eval_strategy si tu firma lo pide
     if "evaluation_strategy" not in sig_keys and "eval_strategy" in sig_keys and "evaluation_strategy" in desired:
         desired["eval_strategy"] = desired.pop("evaluation_strategy")
 
-    # Si pediste best model, asegura MATCH entre eval y save
     if desired.get("load_best_model_at_end"):
         es = desired.get("eval_strategy", desired.get("evaluation_strategy", None))
         if es is not None and "save_strategy" in desired:
             desired["save_strategy"] = es
 
-    # Fallback ultra-viejo: sin claves de strategy
     if ("evaluation_strategy" not in sig_keys) and ("eval_strategy" not in sig_keys):
         desired.pop("evaluation_strategy", None)
         desired.pop("eval_strategy", None)
@@ -262,9 +276,12 @@ def make_training_args(args, fp16: bool):
         if "do_eval" in sig_keys:
             desired["do_eval"] = True
 
-    # Filtrado final por firma real
     filtered = {k: v for k, v in desired.items() if k in sig_keys}
     return TrainingArguments(**filtered)
+
+# ---------------------------
+# Main
+# ---------------------------
 
 def main():
     parser = argparse.ArgumentParser()
@@ -295,11 +312,11 @@ def main():
     parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
 
-    # (Opcionales pero útiles en VRAM)
+    # VRAM helpers
     parser.add_argument("--auto_find_batch_size", action="store_true")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=None)
 
-    # (Opcional) logging más controlable
+    # Logging
     parser.add_argument("--logging_steps", type=int, default=50)
 
     args = parser.parse_args()
@@ -310,6 +327,7 @@ def main():
     if df.empty:
         raise SystemExit("No hay datos válidos.")
 
+    # Input de texto para el modelo (NO usa dewey_text)
     X = build_text_column(df, args.text_fields)
     y = df["dewey"].astype(str).values
 
@@ -319,10 +337,10 @@ def main():
     id2label = {i:lbl for lbl,i in label2id.items()}
     y_ids = np.array([label2id[v] for v in y], dtype=np.int64)
 
+    # Split estratificado con clases raras a train
     idx_train, idx_val = stratified_split_with_rare(
         df, test_size=args.test_size, seed=args.random_state, min_per_class=args.min_per_class
     )
-
     df_train = pd.DataFrame({"text": X.iloc[idx_train].values, "label": y_ids[idx_train]})
     df_val   = pd.DataFrame({"text": X.iloc[idx_val].values,   "label": y_ids[idx_val]})
 
@@ -347,14 +365,15 @@ def main():
     dsd = dsd.map(tokenize_fn, batched=True, remove_columns=["text"])
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
-    # Class weights (desbalanceo)
+    # Class weights
     counts = Counter(df_train["label"].tolist())
     num_classes = len(labels_sorted)
     weights = torch.ones(num_classes, dtype=torch.float32)
     total = len(df_train)
+    beta = 0.99
     for c in range(num_classes):
-        freq = counts.get(c, 0)
-        weights[c] = 1.0 if freq == 0 else total / (num_classes * freq)
+        n_c = max(1, counts.get(c, 0))
+        weights[c] = (1 - beta) / (1 - beta ** n_c)
 
     # Modelo
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -364,10 +383,8 @@ def main():
         label2id=label2id
     )
 
-
     print("Transformers:", __import__("transformers").__version__)
     print("TrainingArguments accepts:", sorted(inspect.signature(TrainingArguments.__init__).parameters.keys()))
-
 
     training_args = make_training_args(args, fp16=torch.cuda.is_available())
 
@@ -405,7 +422,10 @@ def main():
     y_true = preds.label_ids
     y_pred = np.argmax(preds.predictions, axis=-1)
 
-    rep = classification_report(y_true, y_pred, target_names=[id2label[i] for i in range(num_classes)], zero_division=0, output_dict=True)
+    rep = classification_report(
+        y_true, y_pred, target_names=[id2label[i] for i in range(num_classes)],
+        zero_division=0, output_dict=True
+    )
     cm  = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
     bal_acc = balanced_accuracy_score(y_true, y_pred)
 
