@@ -129,9 +129,6 @@ def predict_pdf(pdf_path: str, artifacts_dir: str, text_fields: str = "both",
         labels = np.array(preds)
         winner_label = labels[0]
         out = {
-            "pdf": pdf_path,
-            "supports_proba": False,
-            "num_chunks": len(chunks),
             "chunks": [{"idx": i, "pred": str(preds[i])} for i in range(len(preds))],
             "final_pred": str(winner_label),
             "final_score": None,
@@ -166,9 +163,6 @@ def predict_pdf(pdf_path: str, artifacts_dir: str, text_fields: str = "both",
         })
 
     out = {
-        "pdf": pdf_path,
-        "supports_proba": True,
-        "num_chunks": len(chunks),
         "final_pred": winner_label,
         "final_score": winner_score,
         "top_k": top_list,
@@ -201,31 +195,10 @@ def main():
         generalize=args.generalize
     )
 
-    # imprimir resumen humano
-    if res.get("supports_proba", False):
-        print("✅ Predicción (agregación por probas promedio):")
-        print(f"  - Clase predicha: {res['final_pred']}")
-        print(f"  - Score: {res['final_score']:.4f}")
-        if args.generalize and "final_general" in res:
-            gen = res["final_general"]
-            print(f"  - Generalista: {gen['code']} | {gen['name']}")
-        print("  - Top-{}: {}".format(
-            args.top_k,
-            ", ".join(f"{x['label']} ({x['score']:.3f})" for x in res['top_k'])
-        ))
-        print(f"  - Chunks procesados: {res['num_chunks']}")
-    else:
-        print("✅ Predicción (sin probabilidades disponibles):")
-        print(f"  - Clase predicha: {res['final_pred']}")
-        if args.generalize and "final_general" in res:
-            gen = res["final_general"]
-            print(f"  - Generalista: {gen['code']} | {gen['name']}")
-        print(f"  - Chunks procesados: {res['num_chunks']}")
-
     # Guardar reporte JSON
     with open(args.report_json, "w", encoding="utf-8") as f:
         json.dump(res, f, ensure_ascii=False, indent=2)
-    print(f"📝 Reporte guardado en: {args.report_json}")
+    print(json.dumps(res, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":
     main()
