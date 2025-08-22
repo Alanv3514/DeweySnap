@@ -8,6 +8,12 @@ Entrenar un modelo de categorización automática de libros en base al dataset r
 El script principal debe cargar el dataset, dividirlo en conjuntos de entrenamiento y prueba, entrenar el modelo y evaluar su desempeño. Se recomienda guardar el modelo entrenado para su uso posterior.
 
 ## Archivos esperados
-- train_test_model.py: Script principal para entrenamiento y testeo.
-- models/: Carpeta para almacenar modelos entrenados.
-- results/: Carpeta para almacenar resultados y métricas.
+- 00-train_* son archivos de entrenamiento, la ultima version es 00-train_dewey_xlmr.py 
+comando de entrenamiento utilizado:
+conda run --live-stream --name torch129 python 00-train_dewey_xlmr.py `  --data ./libros.txt `  --text_fields both `  --batch_size 16 `  --gradient_accumulation_steps 2 `  --epochs 8 `  --lr 2e-5 `  --patience 3 `  --max_length 384 `  --artifacts_dir ./artifacts_hf `  --evaluation_strategy epoch `  --save_strategy epoch `  --load_best_model_at_end `  --metric_for_best_model f1_macro `  --warmup_ratio 0.06 `  --weight_decay 0.01
+
+- 01-predict_* son archivos de prediccion, la ultima version es 01-predict_pdf_xlmr.py 
+comando utilizado:
+conda run --live-stream --name torch129 python ./01-predict_pdf_xlmr.py `  --pdf ./libro.pdf `  --artifacts ./artifacts_hf `  --text_fields both `  --top_k 5 `  
+--generalize `  --max_length 384 `  --batch_size_infer 8
+      
