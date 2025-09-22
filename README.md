@@ -15,4 +15,4 @@ Esta app permite:
 | [00-Collecting-Dataset](./00-Collecting-Dataset/Readme.md) | Aplicacion para recoleccion del dataset a utilizar. | ✅ Completado |
 | [01-Normalizer-Dataset](./01-Normalizer-Dataset/Readme.md) | Aplicacion para entrenamiento y testeo del modelo utilizar. | ✅ Completado |
 | [02-Training-Testing-Model](./02-Training-Testing-Model/Readme.md) | Aplicacion para entrenamiento y testeo del modelo utilizar. | ✅ Completado |
-| [03-Dewey-Snap-App](./03-Dewey-Snap-App/Readme.md) | Aplicacion final implementando el modelo previamente entrenado. | ⏳ En desarrollo |
+| [03-Dewey-Snap-App](./03-Dewey-Snap-App/Readme.md) | Aplicacion final implementando el modelo previamente entrenado. | ✅ Completado |
